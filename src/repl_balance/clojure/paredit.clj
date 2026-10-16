@@ -405,7 +405,7 @@
          new-s (-> s
                    (z/of-string {:track-position? true})
                    (z/find-last-by-pos pos)
-                   (pe/slurp-forward)
+                   (pe/slurp-forward-into)
                    (z/up)
                    (z/edit* zip-utils/re-indent-form)
                    (z/root-string))]
@@ -523,9 +523,9 @@
          new-s (if (coll-end? loc pos)
                  (-> (or (some-> loc z/down z/rightmost*)
                          (-> loc (z/insert-child (n/spaces 1)) z/down*))
-                     pe/slurp-backward
+                     pe/slurp-backward-into
                      z/root-string)
-                 (-> loc pe/slurp-backward z/root-string))]
+                 (-> loc pe/slurp-backward-into z/root-string))]
      (doto buf
        (.clear)
        (.write new-s)
