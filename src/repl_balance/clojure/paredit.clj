@@ -61,17 +61,15 @@
       (+ row-offset (dec (min (:end-col pos) row-len)))
       (+ row-offset (dec (min (:col pos) row-len))))))
 
-(defn str-find-cursor-range
-  "given a string and a position (i.e. map with [:row :col])
-  return the cursor position as an int
-  Note: inverse of str-find-pos"
+(defn str-find-pos-range
+  "given a string and a position (i.e. map with [:row :col :end-row :end-col])
+  return the position range (i.e. substring beg and end)"
   [^String s pos]
   (let [offsets (str-row-offsets s)
-        row-offset (-> (:row pos)
-                       dec
-                       (offsets))]
-    [(+ row-offset (dec (:col pos)))
-     (+ row-offset (dec (:end-col pos)))]))
+        beg-row-offset (-> (:row pos) dec offsets)
+        end-row-offset (-> (:end-row pos) dec offsets)]
+    [(+ beg-row-offset (dec (:col pos)))
+     (+ end-row-offset (dec (:end-col pos)))]))
 
 ;; zipper/locator based functions
 
@@ -395,17 +393,20 @@
   "For a Buffer, slurp forward"
   ([] (slurp-forward j/*buffer*))
   ([buf]
-   (when (#{\]\)\}} (char (.currChar buf)))
-     (doto buf
-       (.write " ")
-       (.move -1)))
    (let [cur (.cursor buf)
          s (str buf)
          pos (str-find-pos s cur)
-         new-s (-> s
-                   (z/of-string {:track-position? true})
-                   (z/find-last-by-pos pos)
-                   (pe/slurp-forward-into)
+         loc (-> s
+                 (z/of-string {:track-position? true})
+                 (z/find-last-by-pos pos))
+         inside? (if (and (z/seq? loc)
+                          (let [node-pos (-> loc z/node meta)
+                                [beg end] (str-find-pos-range s node-pos)]
+                            (< beg cur end)))
+                   :current
+                   :parent)
+         new-s (-> loc
+                   (pe/slurp-forward-into {:from inside?})
                    (z/up)
                    (z/edit* zip-utils/re-indent-form)
                    (z/root-string))]
@@ -520,12 +521,17 @@
          loc (-> s
                  (z/of-string {:track-position? true})
                  (z/find-last-by-pos pos))
-         new-s (if (coll-end? loc pos)
-                 (-> (or (some-> loc z/down z/rightmost*)
-                         (-> loc (z/insert-child (n/spaces 1)) z/down*))
-                     pe/slurp-backward-into
-                     z/root-string)
-                 (-> loc pe/slurp-backward-into z/root-string))]
+         inside? (if (and (z/seq? loc)
+                          (let [node-pos (-> loc z/node meta)
+                                [beg end] (str-find-pos-range s node-pos)]
+                            (< beg cur end)))
+                   :current
+                   :parent)
+         new-s (-> loc 
+                   (pe/slurp-backward-into {:from inside?})
+                   (z/up)
+                   (z/edit* zip-utils/re-indent-form)
+                   (z/root-string))]
      (doto buf
        (.clear)
        (.write new-s)
@@ -557,16 +563,22 @@
   "insert open paren and slurp forward"
   ([] (open-and-slurp j/*buffer*))
   ([buf]
-   (doto buf
-     (.write "()")
-     (.move -1))
-   (slurp-forward buf)
-   (.delete buf 1)
-   ;; should this be part of slurp
-   #_(when (#{\(\[\{} (.currChar buf))
-     (doto buf
-       (.write " ")
-       (.move -1)))))
+   (let [cur (.cursor buf)
+         s (str buf)
+         pos (str-find-pos s cur)
+         loc (-> s
+                 (z/of-string {:track-position? true})
+                 (z/find-last-by-pos pos))
+         slurpee (z/node loc)
+         new-s (-> loc
+                   (z/insert-left ())
+                   (z/remove)
+                   (z/insert-child slurpee)
+                   (z/root-string))]
+    (doto buf
+      (.clear)
+      (.write new-s)
+      (.cursor (inc cur))))))
 
 ;; splice and split
 
@@ -590,7 +602,7 @@
        ;; do special case of splicing a string
        (let [loc-pos (-> loc z/node meta)
              ;; TODO: check for balance/breaking splices and refuse with error message
-             [s-beg s-end] (str-find-cursor-range s loc-pos)
+             [s-beg s-end] (str-find-pos-range s loc-pos)
              ;; TODO: Maybe we need spaces if no whitespace exists
              new-s (str (subs s 0 s-beg)  (subs s (inc s-beg) (dec s-end))  (subs s s-end))]
          [new-s (dec cur)])
